@@ -1,0 +1,33 @@
+# Proposal
+
+## Why
+
+Recent releases exposed multiple user-found regressions after publishing. The project has many useful tests, but the release gate is split across app-specific scripts and CI workflows. That makes it easy to miss a maintained surface, rerun the same layer through different aggregate scripts, or ship without a clear mapping from bug class to harness layer.
+
+## Scope
+
+- In scope:
+  - Add a root release verification harness that covers desktop, CLI, web, Cloudflare worker, and shared workspace packages.
+  - Keep each harness command unique so release validation does not duplicate the same test layer through nested aggregate scripts.
+  - Keep the desktop jsdom suite within a bounded worker pool so the release gate remains reliable on normal developer machines.
+  - Serialize programmatic CLI commands that share process-global runtime and
+    database state.
+  - Document the expected verification layers for future bug fixes and release work.
+- Out of scope:
+  - Rewriting existing test suites.
+  - Adding new product-specific regression cases for the user-reported bugs before those bugs are triaged individually.
+  - Replacing GitHub Actions release packaging jobs.
+
+## Risks
+
+- The full release harness is slower than the existing desktop-only gate because it includes all maintained surfaces.
+- Newly exposed package-level typecheck gaps may fail until shared packages are brought into compliance.
+- E2E smoke remains environment-sensitive and may require local browser/runtime dependencies.
+- Reducing desktop test parallelism increases suite duration, but avoids worker RPC failures and false timeout failures under memory pressure.
+- CLI runtime paths, database handles, console suppression, and test process
+  state are global; serializing embedded invocations trades some test
+  parallelism for data-directory isolation.
+
+## Rollback Thinking
+
+The change is additive. If the harness blocks unexpectedly, remove the root `verify:release` scripts and the package-level typecheck scripts, then continue using the existing app-specific verification commands while the failure is diagnosed.

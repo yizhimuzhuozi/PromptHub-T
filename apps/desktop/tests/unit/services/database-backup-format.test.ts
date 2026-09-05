@@ -1,0 +1,501 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  DB_BACKUP_VERSION,
+  hasMeaningfulBackupContent,
+  parsePromptHubBackupFile,
+  parsePromptHubBackupFileContent,
+} from "../../../src/renderer/services/database-backup-format";
+
+describe("database-backup-format", () => {
+  it("preserves current safety provenance and normalizes only legacy methods", () => {
+    const safetyReport = {
+      level: "safe",
+      summary: "Checked",
+      findings: [],
+      recommendedAction: "allow",
+      scannedAt: 1,
+      checkedFileCount: 1,
+    };
+    const backup = parsePromptHubBackupFileContent(
+      JSON.stringify({
+        exportedAt: "2026-07-30T00:00:00.000Z",
+        prompts: [],
+        folders: [],
+        versions: [],
+        skills: [
+          {
+            id: "preflight",
+            name: "preflight",
+            protocol_type: "skill",
+            is_favorite: false,
+            created_at: 1,
+            updated_at: 1,
+            safetyReport: { ...safetyReport, scanMethod: "preflight" },
+          },
+          {
+            id: "legacy",
+            name: "legacy",
+            protocol_type: "skill",
+            is_favorite: false,
+            created_at: 1,
+            updated_at: 1,
+            safetyReport: { ...safetyReport, scanMethod: "static" },
+          },
+          {
+            id: "unknown",
+            name: "unknown",
+            protocol_type: "skill",
+            is_favorite: false,
+            created_at: 1,
+            updated_at: 1,
+            safetyReport: { ...safetyReport, scanMethod: "future" },
+          },
+        ],
+      }),
+    );
+
+    expect(backup.skills?.[0]?.safetyReport?.scanMethod).toBe("preflight");
+    expect(backup.skills?.[1]?.safetyReport?.scanMethod).toBe("preflight");
+    expect(backup.skills?.[2]).not.toHaveProperty("safetyReport");
+  });
+
+  it("parses a full backup envelope into a normalized backup payload", () => {
+    const backup = parsePromptHubBackupFileContent(
+      JSON.stringify({
+        exportedAt: "2026-04-07T00:00:00.000Z",
+        kind: "prompthub-backup",
+        payload: {
+          exportedAt: "2026-04-07T00:00:00.000Z",
+          folders: [],
+          prompts: [],
+          version: 1,
+          versions: [],
+        },
+      }),
+    );
+
+    expect(backup.prompts).toEqual([]);
+    expect(backup.folders).toEqual([]);
+    expect(backup.versions).toEqual([]);
+    expect(backup.version).toBe(1);
+  });
+
+  it("treats a session preference-only Agent section as meaningful backup content", () => {
+    const backup = parsePromptHubBackupFileContent(
+      JSON.stringify({
+        exportedAt: "2026-07-29T00:00:00.000Z",
+        kind: "prompthub-backup",
+        payload: {
+          exportedAt: "2026-07-29T00:00:00.000Z",
+          folders: [],
+          prompts: [],
+          version: 1,
+          versions: [],
+          agentManagement: {
+            version: 1,
+            providerProfiles: [],
+            snapshots: [],
+            sessionSourcePreferences: [
+              {
+                platformId: "claude",
+                adapterId: "claude-jsonl-v1",
+                enabled: true,
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(hasMeaningfulBackupContent(backup)).toBe(true);
+  });
+
+  it("parses a selective export envelope into an importable normalized backup payload", () => {
+    const backup = parsePromptHubBackupFileContent(
+      JSON.stringify({
+        exportedAt: "2026-04-07T00:00:00.000Z",
+        kind: "prompthub-export",
+        payload: {
+          exportedAt: "2026-04-07T00:00:00.000Z",
+          prompts: [
+            {
+              id: "prompt-1",
+              title: "Imported",
+              userPrompt: "User",
+              variables: [],
+              tags: [],
+              isFavorite: false,
+              isPinned: false,
+              version: 1,
+              currentVersion: 1,
+              usageCount: 0,
+              createdAt: "2026-04-07T00:00:00.000Z",
+              updatedAt: "2026-04-07T00:00:00.000Z",
+            },
+          ],
+        },
+        scope: {
+          aiConfig: false,
+          folders: false,
+          images: false,
+          prompts: true,
+          settings: false,
+          skills: false,
+          versions: false,
+        },
+      }),
+    );
+
+    expect(backup.prompts).toHaveLength(1);
+    expect(backup.folders).toEqual([]);
+    expect(backup.versions).toEqual([]);
+  });
+
+  it("normalizes a legacy raw backup object with missing optional collections", () => {
+    const backup = parsePromptHubBackupFileContent(
+      JSON.stringify({
+        exportedAt: "2026-04-07T00:00:00.000Z",
+        prompts: [],
+      }),
+    );
+
+    expect(backup.version).toBe(DB_BACKUP_VERSION);
+    expect(backup.folders).toEqual([]);
+    expect(backup.versions).toEqual([]);
+  });
+
+  it("rejects arbitrary JSON that is not a PromptHub backup/export file", () => {
+    expect(() =>
+      parsePromptHubBackupFileContent(
+        JSON.stringify({ hello: "world", random: [1, 2, 3] }),
+      ),
+    ).toThrow(
+      "Invalid PromptHub backup: unsupported file format. Please import a PromptHub backup/export file.",
+    );
+  });
+
+  it("rejects malformed prompt payloads in strict mode instead of normalizing them to an empty restore", () => {
+    expect(() =>
+      parsePromptHubBackupFileContent(
+        JSON.stringify({
+          exportedAt: "2026-04-07T00:00:00.000Z",
+          prompts: [{ id: "prompt-1" }],
+          folders: [],
+          versions: [],
+        }),
+      ),
+    ).toThrow("Invalid PromptHub backup: prompts payload is malformed.");
+  });
+
+  it("lenient parser drops corrupted prompt records and keeps the rest, reporting skipped counts", () => {
+    const goodPrompt = {
+      id: "prompt-good",
+      title: "Good",
+      userPrompt: "Body",
+      variables: [],
+      tags: [],
+      isFavorite: false,
+      isPinned: false,
+      version: 1,
+      currentVersion: 1,
+      usageCount: 0,
+      createdAt: "2026-04-07T00:00:00.000Z",
+      updatedAt: "2026-04-07T00:00:00.000Z",
+    };
+    const badPrompt = { id: "prompt-bad" }; // missing required fields
+
+    const { backup, skipped } = parsePromptHubBackupFile(
+      JSON.stringify({
+        kind: "prompthub-backup",
+        exportedAt: "2026-04-07T00:00:00.000Z",
+        payload: {
+          exportedAt: "2026-04-07T00:00:00.000Z",
+          version: 1,
+          prompts: [goodPrompt, badPrompt],
+          folders: [],
+          versions: [],
+        },
+      }),
+    );
+
+    expect(backup.prompts).toHaveLength(1);
+    expect(backup.prompts[0]?.id).toBe("prompt-good");
+    expect(skipped.prompts).toBe(1);
+    expect(skipped.folders).toBe(0);
+    expect(skipped.versions).toBe(0);
+  });
+
+  it("lenient parser drops prompt versions that reference dropped prompts (referential integrity)", () => {
+    const goodPrompt = {
+      id: "prompt-keep",
+      title: "Keep",
+      userPrompt: "Body",
+      variables: [],
+      tags: [],
+      isFavorite: false,
+      isPinned: false,
+      version: 1,
+      currentVersion: 1,
+      usageCount: 0,
+      createdAt: "2026-04-07T00:00:00.000Z",
+      updatedAt: "2026-04-07T00:00:00.000Z",
+    };
+    const badPrompt = { id: "prompt-drop" }; // will be filtered
+    const orphanVersion = {
+      id: "version-orphan",
+      promptId: "prompt-drop",
+      version: 1,
+      userPrompt: "Old body",
+      createdAt: "2026-04-07T00:00:00.000Z",
+    };
+    const keptVersion = {
+      id: "version-keep",
+      promptId: "prompt-keep",
+      version: 1,
+      userPrompt: "Old body",
+      createdAt: "2026-04-07T00:00:00.000Z",
+    };
+
+    const { backup, skipped } = parsePromptHubBackupFile(
+      JSON.stringify({
+        kind: "prompthub-backup",
+        exportedAt: "2026-04-07T00:00:00.000Z",
+        payload: {
+          exportedAt: "2026-04-07T00:00:00.000Z",
+          version: 1,
+          prompts: [goodPrompt, badPrompt],
+          folders: [],
+          versions: [keptVersion, orphanVersion],
+        },
+      }),
+    );
+
+    expect(backup.prompts).toHaveLength(1);
+    expect(backup.versions).toHaveLength(1);
+    expect(backup.versions[0]?.id).toBe("version-keep");
+    expect(skipped.prompts).toBe(1);
+    expect(skipped.versions).toBe(1); // orphan dropped
+  });
+
+  it("lenient parser returns all-zero skipped counts when the payload is fully valid", () => {
+    const { backup, skipped } = parsePromptHubBackupFile(
+      JSON.stringify({
+        kind: "prompthub-backup",
+        exportedAt: "2026-04-07T00:00:00.000Z",
+        payload: {
+          exportedAt: "2026-04-07T00:00:00.000Z",
+          version: 1,
+          prompts: [],
+          folders: [],
+          versions: [],
+        },
+      }),
+    );
+
+    expect(backup.prompts).toEqual([]);
+    expect(skipped.prompts).toBe(0);
+    expect(skipped.folders).toBe(0);
+    expect(skipped.versions).toBe(0);
+    expect(skipped.promptRelations).toBe(0);
+    expect(skipped.outputFormatItems).toBe(0);
+    expect(skipped.skills).toBe(0);
+    expect(skipped.skillVersions).toBe(0);
+    expect(skipped.skillFiles).toBe(0);
+  });
+
+  it("lenient parser drops output format items that reference missing prompts", () => {
+    const prompt = {
+      id: "prompt-1",
+      title: "Imported",
+      userPrompt: "User",
+      variables: [],
+      tags: [],
+      isFavorite: false,
+      isPinned: false,
+      version: 1,
+      currentVersion: 1,
+      usageCount: 0,
+      createdAt: "2026-04-07T00:00:00.000Z",
+      updatedAt: "2026-04-07T00:00:00.000Z",
+    };
+
+    const { backup, skipped } = parsePromptHubBackupFile(
+      JSON.stringify({
+        kind: "prompthub-backup",
+        exportedAt: "2026-04-07T00:00:00.000Z",
+        payload: {
+          exportedAt: "2026-04-07T00:00:00.000Z",
+          version: 1,
+          prompts: [prompt],
+          folders: [],
+          versions: [],
+          outputFormatItems: [
+            {
+              id: "keep-self",
+              sourcePromptId: "prompt-1",
+              targetPromptId: null,
+              sortOrder: 0,
+              createdAt: "2026-04-07T00:00:00.000Z",
+              updatedAt: "2026-04-07T00:00:00.000Z",
+            },
+            {
+              id: "drop-source",
+              sourcePromptId: "missing-source",
+              targetPromptId: null,
+              sortOrder: 1,
+              createdAt: "2026-04-07T00:00:00.000Z",
+              updatedAt: "2026-04-07T00:00:00.000Z",
+            },
+            {
+              id: "drop-target",
+              sourcePromptId: "prompt-1",
+              targetPromptId: "missing-target",
+              sortOrder: 2,
+              createdAt: "2026-04-07T00:00:00.000Z",
+              updatedAt: "2026-04-07T00:00:00.000Z",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(backup.outputFormatItems?.map((item) => item.id)).toEqual([
+      "keep-self",
+    ]);
+    expect(skipped.outputFormatItems).toBe(2);
+  });
+
+  it("lenient parser drops prompt relations that reference missing prompts", () => {
+    const prompts = [
+      {
+        id: "prompt-1",
+        title: "Source",
+        userPrompt: "Body",
+        variables: [],
+        tags: [],
+        isFavorite: false,
+        isPinned: false,
+        version: 1,
+        currentVersion: 1,
+        usageCount: 0,
+        createdAt: "2026-04-07T00:00:00.000Z",
+        updatedAt: "2026-04-07T00:00:00.000Z",
+      },
+      {
+        id: "prompt-2",
+        title: "Target",
+        userPrompt: "Body",
+        variables: [],
+        tags: [],
+        isFavorite: false,
+        isPinned: false,
+        version: 1,
+        currentVersion: 1,
+        usageCount: 0,
+        createdAt: "2026-04-07T00:00:00.000Z",
+        updatedAt: "2026-04-07T00:00:00.000Z",
+      },
+    ];
+    const { backup, skipped } = parsePromptHubBackupFile(
+      JSON.stringify({
+        kind: "prompthub-backup",
+        exportedAt: "2026-04-07T00:00:00.000Z",
+        payload: {
+          version: 1,
+          exportedAt: "2026-04-07T00:00:00.000Z",
+          prompts,
+          folders: [],
+          versions: [],
+          promptRelations: [
+            {
+              id: "relation-keep",
+              sourcePromptId: "prompt-1",
+              targetPromptId: "prompt-2",
+              kind: "next_step",
+              note: null,
+              createdAt: "2026-04-07T00:00:00.000Z",
+              updatedAt: "2026-04-07T00:00:00.000Z",
+            },
+            {
+              id: "relation-drop",
+              sourcePromptId: "prompt-1",
+              targetPromptId: "missing-prompt",
+              kind: "next_step",
+              note: null,
+              createdAt: "2026-04-07T00:00:00.000Z",
+              updatedAt: "2026-04-07T00:00:00.000Z",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(backup.promptRelations?.map((relation) => relation.id)).toEqual([
+      "relation-keep",
+    ]);
+    expect(skipped.promptRelations).toBe(1);
+  });
+
+  it("lenient parser clears invalid folder parent references instead of keeping broken links", () => {
+    const { backup, skipped } = parsePromptHubBackupFile(
+      JSON.stringify({
+        kind: "prompthub-backup",
+        exportedAt: "2026-04-07T00:00:00.000Z",
+        payload: {
+          exportedAt: "2026-04-07T00:00:00.000Z",
+          version: 1,
+          prompts: [],
+          folders: [
+            {
+              id: "child-folder",
+              name: "Child",
+              parentId: "missing-parent",
+              createdAt: "2026-04-07T00:00:00.000Z",
+              updatedAt: "2026-04-07T00:00:00.000Z",
+            },
+          ],
+          versions: [],
+        },
+      }),
+    );
+
+    expect(backup.folders[0]?.parentId).toBeNull();
+    expect(skipped.folders).toBe(1);
+  });
+
+  it("lenient parser clears prompt folder references that point to missing folders", () => {
+    const { backup, skipped } = parsePromptHubBackupFile(
+      JSON.stringify({
+        kind: "prompthub-backup",
+        exportedAt: "2026-04-07T00:00:00.000Z",
+        payload: {
+          exportedAt: "2026-04-07T00:00:00.000Z",
+          version: 1,
+          prompts: [
+            {
+              id: "prompt-1",
+              title: "Imported",
+              userPrompt: "User",
+              variables: [],
+              tags: [],
+              folderId: "missing-folder",
+              isFavorite: false,
+              isPinned: false,
+              version: 1,
+              currentVersion: 1,
+              usageCount: 0,
+              createdAt: "2026-04-07T00:00:00.000Z",
+              updatedAt: "2026-04-07T00:00:00.000Z",
+            },
+          ],
+          folders: [],
+          versions: [],
+        },
+      }),
+    );
+
+    expect(backup.prompts[0]?.folderId).toBeNull();
+    expect(skipped.prompts).toBe(1);
+  });
+});

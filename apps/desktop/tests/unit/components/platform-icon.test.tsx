@@ -1,0 +1,299 @@
+import { render, screen } from "@testing-library/react";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+import { PlatformIcon } from "../../../src/renderer/components/ui/PlatformIcon";
+
+const PNG_SIGNATURE = "89504e470d0a1a0a";
+const platformAssetsDir = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../src/renderer/assets/platforms",
+);
+
+describe("PlatformIcon", () => {
+  it("reuses the existing Doubao brand mark for Doubao Work", () => {
+    render(<PlatformIcon platformId="doubao" size={20} />);
+
+    expect(screen.getByRole("img", { name: "doubao icon" })).toHaveAttribute(
+      "src",
+      expect.stringContaining("doubao.svg"),
+    );
+  });
+
+  it("renders the official Hermes Agent portrait mark", () => {
+    render(<PlatformIcon platformId="hermes" size={20} />);
+
+    const icon = screen.getByRole("img", { name: "hermes icon" });
+    expect(icon).toHaveAttribute("src", expect.stringContaining("hermes.png"));
+    expect(icon).toHaveClass("rounded-full", "bg-white");
+
+    const asset = readFileSync(join(platformAssetsDir, "hermes.png"));
+    expect(asset.subarray(0, 8).toString("hex")).toBe(PNG_SIGNATURE);
+    expect(asset.readUInt32BE(16)).toBe(504);
+    expect(asset.readUInt32BE(20)).toBe(512);
+  });
+
+  it("renders the bundled high-resolution Codex identity for both app themes", () => {
+    render(<PlatformIcon platformId="codex" size={52} />);
+
+    const icons = screen.getAllByRole("img", { name: "codex icon" });
+    expect(icons).toHaveLength(2);
+    expect(icons[0]).toHaveAttribute(
+      "src",
+      expect.stringContaining("codex.png"),
+    );
+    expect(icons[0]).toHaveClass("dark:hidden");
+    expect(icons[1]).toHaveAttribute(
+      "src",
+      expect.stringContaining("codex-dark.png"),
+    );
+    expect(icons[1]).toHaveClass("hidden", "dark:block");
+
+    const assets = ["codex.png", "codex-dark.png"].map((fileName) =>
+      readFileSync(join(platformAssetsDir, fileName)),
+    );
+    for (const asset of assets) {
+      expect(asset.readUInt32BE(16)).toBe(1024);
+      expect(asset.readUInt32BE(20)).toBe(1024);
+    }
+    expect(assets[0].equals(assets[1])).toBe(false);
+  });
+
+  it("renders the bundled ChatGPT app identity for both app themes", () => {
+    render(<PlatformIcon platformId="chatgpt" size={20} />);
+
+    const icons = screen.getAllByRole("img", { name: "chatgpt icon" });
+    expect(icons).toHaveLength(2);
+    expect(icons[0]).toHaveAttribute(
+      "src",
+      expect.stringContaining("chatgpt-light.png"),
+    );
+    expect(icons[0]).toHaveClass("dark:hidden");
+    expect(icons[1]).toHaveAttribute(
+      "src",
+      expect.stringContaining("chatgpt-dark.png"),
+    );
+    expect(icons[1]).toHaveClass("hidden", "dark:block");
+
+    const assets = ["chatgpt-light.png", "chatgpt-dark.png"].map((fileName) =>
+      readFileSync(join(platformAssetsDir, fileName)),
+    );
+    for (const asset of assets) {
+      expect(asset.readUInt32BE(16)).toBe(1024);
+      expect(asset.readUInt32BE(20)).toBe(1024);
+    }
+    expect(assets[0].equals(assets[1])).toBe(false);
+  });
+
+  it("renders the real Cherry Studio icon instead of the generic fallback", () => {
+    render(<PlatformIcon platformId="cherry-studio" size={20} />);
+
+    const icon = screen.getByRole("img", { name: "cherry-studio icon" });
+    expect(icon).toHaveAttribute(
+      "src",
+      expect.stringContaining("cherry-studio.png"),
+    );
+  });
+
+  it("renders the QClaw icon instead of reusing the OpenClaw icon", () => {
+    render(<PlatformIcon platformId="qclaw" size={20} />);
+
+    const icon = screen.getByRole("img", { name: "qclaw icon" });
+    expect(icon).toHaveAttribute("src", expect.stringContaining("qclaw.png"));
+    expect(icon).not.toHaveAttribute(
+      "src",
+      expect.stringContaining("openclaw.png"),
+    );
+  });
+
+  it("renders bundled brand assets for the newly supported local Claw platforms", () => {
+    const expectedAssets = {
+      copaw: "copaw.png",
+      autoclaw: "autoclaw.png",
+      nanoclaw: "nanoclaw.png",
+    };
+
+    for (const [platformId, fileName] of Object.entries(expectedAssets)) {
+      const { unmount } = render(
+        <PlatformIcon platformId={platformId} size={20} />,
+      );
+      const icon = screen.getByRole("img", { name: `${platformId} icon` });
+
+      expect(icon).toHaveAttribute("src", expect.stringContaining(fileName));
+      expect(
+        readFileSync(join(platformAssetsDir, fileName)).length,
+      ).toBeGreaterThan(0);
+      unmount();
+    }
+  });
+
+  it("keeps TRAE IDE and TRAE Work variants on the TRAE brand icon", () => {
+    for (const platformId of ["trae", "trae-work", "trae-cn", "trae-work-cn"]) {
+      const { unmount } = render(
+        <PlatformIcon platformId={platformId} size={20} />,
+      );
+
+      expect(
+        screen.getByRole("img", { name: `${platformId} icon` }),
+      ).toHaveAttribute("src", expect.stringContaining("trae.png"));
+
+      unmount();
+    }
+  });
+
+  it("renders the WorkBuddy icon instead of the generic fallback", () => {
+    render(<PlatformIcon platformId="workbuddy" size={20} />);
+
+    const icon = screen.getByRole("img", { name: "workbuddy icon" });
+    expect(icon).toHaveAttribute(
+      "src",
+      expect.stringContaining("workbuddy.svg"),
+    );
+  });
+
+  it("renders the official ZCode mark", () => {
+    render(<PlatformIcon platformId="zcode" size={20} />);
+
+    const icon = screen.getByRole("img", { name: "zcode icon" });
+    expect(icon).toHaveAttribute("src", expect.stringContaining("zcode.svg"));
+  });
+
+  it("renders the Grok brand icon in both light and dark themes", () => {
+    render(<PlatformIcon platformId="grok" size={20} />);
+
+    const icons = screen.getAllByRole("img", { name: "grok icon" });
+    expect(icons).toHaveLength(2);
+    expect(icons[0]).toHaveAttribute(
+      "src",
+      expect.stringContaining("grok-light.svg"),
+    );
+    expect(icons[1]).toHaveAttribute(
+      "src",
+      expect.stringContaining("grok-dark.svg"),
+    );
+  });
+
+  it("keeps bundled platform PNG assets as real PNG files", () => {
+    const invalidPngFiles = readdirSync(platformAssetsDir)
+      .filter((fileName) => fileName.endsWith(".png"))
+      .filter((fileName) => {
+        const signature = readFileSync(join(platformAssetsDir, fileName))
+          .subarray(0, 8)
+          .toString("hex");
+
+        return signature !== PNG_SIGNATURE;
+      });
+
+    expect(invalidPngFiles).toEqual([]);
+  });
+
+  it("renders the official Reasonix mark", () => {
+    render(<PlatformIcon platformId="reasonix" size={20} />);
+
+    expect(screen.getByRole("img", { name: "reasonix icon" })).toHaveAttribute(
+      "src",
+      expect.stringContaining("reasonix.svg"),
+    );
+  });
+
+  it("renders the official Kimi Code mark", () => {
+    render(<PlatformIcon platformId="kimi" size={20} />);
+
+    expect(screen.getByRole("img", { name: "kimi icon" })).toHaveAttribute(
+      "src",
+      expect.stringContaining("kimi.png"),
+    );
+  });
+
+  it("renders the official Qwen Code app icon", () => {
+    render(<PlatformIcon platformId="qwen" size={20} />);
+
+    expect(screen.getByRole("img", { name: "qwen icon" })).toHaveAttribute(
+      "src",
+      expect.stringContaining("qwen.png"),
+    );
+    const asset = readFileSync(join(platformAssetsDir, "qwen.png"));
+    expect(asset.subarray(0, 8).toString("hex")).toBe(PNG_SIGNATURE);
+    expect(asset.readUInt32BE(16)).toBe(512);
+    expect(asset.readUInt32BE(20)).toBe(512);
+  });
+
+  it("renders the official DeepSeek Harness fish mark for both app themes", () => {
+    render(<PlatformIcon platformId="deepseek-harness" size={20} />);
+
+    const icons = screen.getAllByRole("img", {
+      name: "deepseek-harness icon",
+    });
+    expect(icons).toHaveLength(2);
+    expect(icons[0]).toHaveAttribute(
+      "src",
+      expect.stringContaining("deepseek-harness-light.svg"),
+    );
+    expect(icons[0]).toHaveClass("dark:hidden");
+    expect(icons[1]).toHaveAttribute(
+      "src",
+      expect.stringContaining("deepseek-harness-dark.svg"),
+    );
+    expect(icons[1]).toHaveClass("hidden", "dark:block");
+
+    const lightAsset = readFileSync(
+      join(platformAssetsDir, "deepseek-harness-light.svg"),
+      "utf8",
+    );
+    const darkAsset = readFileSync(
+      join(platformAssetsDir, "deepseek-harness-dark.svg"),
+      "utf8",
+    );
+
+    for (const asset of [lightAsset, darkAsset]) {
+      expect(asset).toContain('viewBox="0 0 50 50"');
+      expect(asset).toContain('id="path"');
+      expect(asset).not.toContain("prefers-color-scheme");
+    }
+    expect(lightAsset).toContain('fill="#000"');
+    expect(darkAsset).toContain('fill="#fff"');
+  });
+
+  it("renders the official Pi badge instead of a generic fallback", () => {
+    render(<PlatformIcon platformId="pi" size={20} />);
+
+    const icon = screen.getByRole("img", { name: "pi icon" });
+    expect(icon).toHaveAttribute("src", expect.stringContaining("pi.svg"));
+
+    const asset = readFileSync(join(platformAssetsDir, "pi.svg"), "utf8");
+    expect(asset).toContain(
+      '<rect width="800" height="800" rx="120" fill="#09090b"/>',
+    );
+    expect(asset).toContain("M517.36 400 H634.72 V634.72 H517.36 Z");
+  });
+
+  it("renders the official Oh My Pi plugin-connected mark", () => {
+    render(<PlatformIcon platformId="oh-my-pi" size={20} />);
+
+    const icon = screen.getByRole("img", { name: "oh-my-pi icon" });
+    expect(icon).toHaveAttribute(
+      "src",
+      expect.stringContaining("oh-my-pi.svg"),
+    );
+    expect(icon).toHaveClass("rounded", "bg-[#0d0d0d]");
+
+    const asset = readFileSync(join(platformAssetsDir, "oh-my-pi.svg"), "utf8");
+    expect(asset).toContain('viewBox="0 0 120 90"');
+    expect(asset).toContain('fill="#f97316"');
+    expect(asset).toContain('x="71" y="55" width="20" height="16"');
+  });
+
+  it("keeps the Auggie mark legible in app-controlled light and dark themes", () => {
+    render(<PlatformIcon platformId="augment" size={20} />);
+
+    const icon = screen.getByRole("img", { name: "augment icon" });
+    expect(icon).toHaveAttribute("src", expect.stringContaining("augment.svg"));
+    expect(icon).toHaveClass("brightness-0", "dark:invert");
+
+    const asset = readFileSync(join(platformAssetsDir, "augment.svg"), "utf8");
+    expect(asset).toContain('fill="#000000"');
+    expect(asset).not.toContain("prefers-color-scheme");
+  });
+});

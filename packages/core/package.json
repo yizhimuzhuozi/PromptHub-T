@@ -1,0 +1,28 @@
+{
+  "name": "@prompthub/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:performance": "vitest run --config vitest.performance.config.ts"
+  },
+  "dependencies": {
+    "@prompthub/db": "workspace:*",
+    "@prompthub/shared": "workspace:*",
+    "jsonc-parser": "^3.3.1",
+    "smol-toml": "^1.7.0",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "^2.0.0",
+    "typescript": "5.9.3",
+    "vitest": "^2.0.0"
+  }
+}

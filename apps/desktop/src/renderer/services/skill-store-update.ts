@@ -1,0 +1,237 @@
+import type {
+  RegistrySkill,
+  Skill,
+  SkillPackageSnapshot,
+  SkillSourceSnapshot,
+} from "@prompthub/shared/types";
+import { normalizeSkillMdForHash } from "@prompthub/core/skills/skill-frontmatter";
+import { computeStableTextHash } from "@prompthub/shared/utils/skill-identity";
+import {
+  buildSkillSourceUpdateCheck,
+  type SkillSourceStaleTarget,
+} from "@prompthub/shared/utils/skill-source-update";
+import type { SkillSourceResolverKind } from "./skill-source-resolver";
+
+export type RegistrySkillUpdateStatus =
+  | "not-installed"
+  | "no-source"
+  | "source-unavailable"
+  | "baseline-missing"
+  | "up-to-date"
+  | "update-available"
+  | "local-modified"
+  | "conflict";
+
+export interface RegistrySkillUpdateCheck {
+  status: RegistrySkillUpdateStatus;
+  skillId: string;
+  sourceIdentity?: string;
+  installedSkill?: Skill;
+  registrySkill: RegistrySkill;
+  local?: SkillSourceSnapshot;
+  baseline?: SkillSourceSnapshot;
+  remote?: SkillSourceSnapshot;
+  localHash?: string;
+  installedHash?: string;
+  remoteHash: string;
+  localDirectoryFingerprint?: string;
+  installedDirectoryFingerprint?: string;
+  remoteDirectoryFingerprint?: string;
+  remoteContent: string;
+  localPackageSnapshot?: SkillPackageSnapshot;
+  remotePackageSnapshot?: SkillPackageSnapshot;
+  sourceKind?: SkillSourceResolverKind;
+  sourceReference?: string;
+  sourceError?: string;
+  localModified: boolean;
+  remoteChanged: boolean;
+  shouldInitializeBaseline: boolean;
+  hasStaleTargets: boolean;
+  staleTargets?: SkillSourceStaleTarget[];
+}
+
+const PRERELEASE_VERSION_ALIASES = ["alpha", "beta", "rc", "pre", "preview"];
+
+export function normalizeSkillStoreVersion(version?: string | null): string {
+  const normalized = (version ?? "").trim().toLowerCase().replace(/^v/, "");
+  if (!normalized) {
+    return "";
+  }
+
+  return PRERELEASE_VERSION_ALIASES.reduce(
+    (current, label) =>
+      current.replace(
+        new RegExp(`[-_.]?${label}[-_.]?(\\d+)$`, "i"),
+        `-${label}.$1`,
+      ),
+    normalized,
+  );
+}
+
+export function areSkillStoreVersionsEqual(
+  left?: string | null,
+  right?: string | null,
+): boolean {
+  const normalizedLeft = normalizeSkillStoreVersion(left);
+  const normalizedRight = normalizeSkillStoreVersion(right);
+  return (
+    Boolean(normalizedLeft && normalizedRight) &&
+    normalizedLeft === normalizedRight
+  );
+}
+
+export function hasRegistrySkillVersionChanged(
+  installedSkill: Skill,
+  registrySkill: RegistrySkill,
+): boolean {
+  const installedVersion =
+    installedSkill.installed_version ?? installedSkill.version;
+  if (!installedVersion || !registrySkill.version) {
+    return false;
+  }
+  return !areSkillStoreVersionsEqual(installedVersion, registrySkill.version);
+}
+
+export function normalizeSkillContentForHash(content: string): string {
+  return normalizeSkillMdForHash(content);
+}
+
+export function computeSkillContentFingerprint(content: string): string {
+  return computeStableTextHash(normalizeSkillContentForHash(content));
+}
+
+export async function computeSkillContentHash(
+  content: string,
+): Promise<string> {
+  const normalized = normalizeSkillContentForHash(content);
+  const subtle = globalThis.crypto?.subtle;
+
+  if (subtle) {
+    const bytes = new TextEncoder().encode(normalized);
+    const digest = await subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  return computeStableTextHash(normalized);
+}
+
+export function findInstalledRegistrySkill(
+  skills: Skill[],
+  registrySkill: RegistrySkill,
+): Skill | null {
+  const slug = registrySkill.slug.toLowerCase();
+  const sourceId = registrySkill.source_id?.toLowerCase();
+  const contentUrl = registrySkill.content_url?.toLowerCase();
+  const sourceUrl = registrySkill.source_url?.toLowerCase();
+  const installName = (
+    registrySkill.install_name || registrySkill.slug
+  ).toLowerCase();
+  const hasInstalledSourceIdentity = (skill: Skill) =>
+    Boolean(skill.source_id || skill.content_url || skill.source_url);
+
+  return (
+    (sourceId
+      ? skills.find((skill) => skill.source_id?.toLowerCase() === sourceId)
+      : undefined) ||
+    (contentUrl
+      ? skills.find((skill) => skill.content_url?.toLowerCase() === contentUrl)
+      : undefined) ||
+    (sourceUrl
+      ? skills.find(
+          (skill) =>
+            skill.source_url?.toLowerCase() === sourceUrl &&
+            skill.name.toLowerCase() === installName,
+        )
+      : undefined) ||
+    skills.find(
+      (skill) =>
+        skill.registry_slug?.toLowerCase() === slug &&
+        !hasInstalledSourceIdentity(skill),
+    ) ||
+    null
+  );
+}
+
+export async function getRegistrySkillUpdateStatus(
+  installedSkill: Skill | null,
+  registrySkill: RegistrySkill,
+  remoteContent = registrySkill.content,
+  options: {
+    staleTargets?: SkillSourceStaleTarget[];
+    resolvedAt?: number;
+    localPackageSnapshot?: SkillPackageSnapshot;
+    remotePackageSnapshot?: SkillPackageSnapshot;
+  } = {},
+): Promise<RegistrySkillUpdateCheck> {
+  const remoteHash = await computeSkillContentHash(remoteContent);
+  if (!installedSkill) {
+    return {
+      status: "not-installed",
+      skillId: registrySkill.source_id || registrySkill.slug,
+      ...(registrySkill.source_id
+        ? { sourceIdentity: registrySkill.source_id }
+        : {}),
+      registrySkill,
+      remoteHash,
+      remoteContent,
+      ...(options.remotePackageSnapshot
+        ? { remotePackageSnapshot: options.remotePackageSnapshot }
+        : {}),
+      localModified: false,
+      remoteChanged: true,
+      shouldInitializeBaseline: false,
+      hasStaleTargets: false,
+    };
+  }
+
+  const localContent =
+    installedSkill.content ?? installedSkill.instructions ?? "";
+  const localHash = await computeSkillContentHash(localContent);
+  const installedHash = installedSkill.installed_content_hash;
+  const localDirectoryFingerprint = installedSkill.directory_fingerprint;
+  const installedDirectoryFingerprint =
+    installedSkill.installed_directory_fingerprint;
+  const remoteDirectoryFingerprint = registrySkill.directory_fingerprint;
+  const sourceCheck = buildSkillSourceUpdateCheck({
+    skillId: installedSkill.id,
+    sourceIdentity:
+      registrySkill.source_id ||
+      installedSkill.source_id ||
+      registrySkill.content_url ||
+      registrySkill.source_url ||
+      null,
+    localContentHash: localHash,
+    installedContentHash: installedHash,
+    remoteContentHash: remoteHash,
+    localDirectoryFingerprint,
+    installedDirectoryFingerprint,
+    remoteDirectoryFingerprint,
+    fingerprintAlgorithm: installedSkill.fingerprint_algorithm,
+    localVersion: installedSkill.version,
+    installedVersion: installedSkill.installed_version,
+    remoteVersion: registrySkill.version,
+    resolvedAt: options.resolvedAt,
+    staleTargets: options.staleTargets,
+  });
+
+  return {
+    ...sourceCheck,
+    installedSkill,
+    registrySkill,
+    localHash,
+    installedHash,
+    remoteHash,
+    localDirectoryFingerprint,
+    installedDirectoryFingerprint,
+    remoteDirectoryFingerprint,
+    remoteContent,
+    ...(options.localPackageSnapshot
+      ? { localPackageSnapshot: options.localPackageSnapshot }
+      : {}),
+    ...(options.remotePackageSnapshot
+      ? { remotePackageSnapshot: options.remotePackageSnapshot }
+      : {}),
+  };
+}
